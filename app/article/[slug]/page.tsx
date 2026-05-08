@@ -45,7 +45,8 @@ export async function generateMetadata({
   const id = parseId(slug);
   if (id === null) return {};
 
-  // Next dedupes identical fetches within a request — this is free
+  // .catch(() => null) here is intentional: a metadata failure should
+  // never crash the page — fall back to empty metadata silently.
   const article = await getArticleById(id).catch(() => null);
   if (!article) return {};
 
@@ -83,11 +84,15 @@ export default async function ArticlePage({ params }: PageProps) {
   const id = parseId(slug);
   if (id === null) notFound();
 
-  const article = await getArticleById(id).catch(() => null);
+  // No .catch() here — getArticleById now distinguishes 404 (returns null)
+  // from 5xx (throws). null → notFound(), thrown error → error.tsx.
+  const article = await getArticleById(id);
   if (!article) notFound();
 
   const authorName = `${article.author.firstName} ${article.author.lastName}`;
-  const paragraphs = article.body.split(/\n+/).filter((p) => p.trim().length > 0);
+  const paragraphs = article.body
+    .split(/\n+/)
+    .filter((p) => p.trim().length > 0);
 
   return (
     <article className="mx-auto max-w-3xl">

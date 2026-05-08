@@ -2,6 +2,7 @@
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { startTransition, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { clsx } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -9,18 +10,42 @@ import { clsx } from "@/lib/utils";
 // ---------------------------------------------------------------------------
 
 interface TagFilterProps {
-  readonly tags: readonly string[];
+  // Server-rendered initial tags passed as prop; React Query keeps them
+  // fresh client-side without a server round-trip on every navigation.
+  readonly initialTags: readonly string[];
   readonly activeTag?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Client-side tags fetcher
+// ---------------------------------------------------------------------------
+
+async function fetchTags(): Promise<string[]> {
+  const res = await fetch("https://dummyjson.com/posts/tag-list");
+  if (!res.ok) throw new Error(`Failed to fetch tags: ${res.status}`);
+  const data = await res.json();
+  return Array.isArray(data) ? data : data.tags ?? [];
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function TagFilter({ tags, activeTag }: TagFilterProps) {
+export function TagFilter({ initialTags, activeTag }: TagFilterProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+
+  // initialTags from server render is used as placeholder data so the
+  // filter is immediately visible. React Query revalidates in the background
+  // after 5 minutes (matches ISR window), keeping the tag list fresh without
+  // a server round-trip on every client navigation.
+  const { data: tags = initialTags } = useQuery({
+    queryKey: ["tags"],
+    queryFn: fetchTags,
+    placeholderData: initialTags as string[],
+    staleTime: 5 * 60 * 1000, // matches ISR revalidate window
+  });
 
   const navigate = useCallback(
     (nextTag: string | null) => {

@@ -4,7 +4,7 @@ import { TagFilter } from "@/components/ui/TagFilter";
 import { PaginationDynamic } from "@/components/ui/PaginationDynamic";
 
 // ---------------------------------------------------------------------------
-// Rendering strategy: SSG + ISR — see README for trade-off rationale
+// Rendering strategy: ISR via Data Cache — see README for trade-off rationale
 // ---------------------------------------------------------------------------
 
 export const revalidate = 300;
@@ -40,7 +40,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const page = parsePage(params.page);
   const tag = parseTag(params.tag);
 
-  // Fetch list + tags in parallel — neither depends on the other
+  // Fetch list + tags in parallel — neither depends on the other.
+  // Tags are passed as initialTags to TagFilter; React Query revalidates
+  // them client-side after the ISR window without a server round-trip.
   const [listResult, tags] = await Promise.all([
     getArticles({ page, tag }),
     getAllTags(),
@@ -57,7 +59,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </p>
       </header>
 
-      <TagFilter tags={tags} activeTag={tag} />
+      <TagFilter initialTags={tags} activeTag={tag} />
 
       <section
         // remount on filter change to drop stale grid state cleanly

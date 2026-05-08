@@ -49,8 +49,6 @@ async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(url, ISR);
 
   if (!res.ok) {
-    // We surface the URL but not response bodies — the latter can leak
-    // upstream error formats into our logs and into the UI's error.tsx.
     throw new Error(`Upstream ${res.status} for ${path}`);
   }
 
@@ -67,12 +65,8 @@ async function fetchJson<T>(path: string): Promise<T> {
  * SSG correctness depends on this being pure: the same id must always
  * produce the same string, otherwise rebuilds churn OG metadata and the
  * CDN serves inconsistent snapshots across edge nodes.
- *
- * Implementation: anchor at a fixed epoch and step backwards by id*hours.
- * No `Date.now()`, no `Math.random()`.
  */
 function deterministicPublishedAt(postId: number): string {
-  // Anchor: 2025-01-01T00:00:00Z. Older posts → smaller id → further back.
   const ANCHOR_MS = Date.UTC(2025, 0, 1);
   const HOUR_MS = 60 * 60 * 1000;
   return new Date(ANCHOR_MS - postId * HOUR_MS).toISOString();
@@ -92,7 +86,6 @@ function enrichArticle(post: DummyJsonPost, author: User): Article {
     body: post.body,
     excerpt: buildExcerpt(post.body),
     tags: post.tags,
-    // Defensive fallbacks: APIs lie, and a 0 is better than a crash.
     reactions: {
       likes: post.reactions?.likes ?? 0,
       dislikes: post.reactions?.dislikes ?? 0,
@@ -107,9 +100,6 @@ function enrichArticle(post: DummyJsonPost, author: User): Article {
 
 /**
  * Map a wire User to the domain User.
- *
- * Trivial today, but isolates us if DummyJSON adds a field, renames one,
- * or we want to derive `displayName` from first+last.
  */
 function toDomainUser(u: DummyJsonUser): User {
   return {
@@ -122,11 +112,7 @@ function toDomainUser(u: DummyJsonUser): User {
 }
 
 /**
- * Fetch a user, with parallel-fetch friendliness in mind.
- *
- * Wrapped so callers can `Promise.all` it cleanly and so we have a single
- * place to add an in-request memoisation cache later (Next dedupes
- * identical fetches within a single render, which is enough for now).
+ * Fetch a user by id.
  */
 async function getUserById(userId: number): Promise<User> {
   const wire = await fetchJson<DummyJsonUser>(`/users/${userId}`);
@@ -145,14 +131,9 @@ interface GetArticlesOptions {
 /**
  * Fetch a paginated list of articles, optionally filtered by tag.
  *
- * Performance characteristics:
  * - 1 request to /posts (or /posts/tag/{tag})
  * - N parallel requests to /users/{id} via Promise.all
- *   → end-to-end latency ≈ max(post fetch, slowest user fetch),
- *     not sum of all of them.
- * - Next.js dedupes identical /users/{id} fetches within the same render,
- *   so authors who write multiple articles in the page only cost one user
- *   request.
+ *   → latency ≈ max(post fetch, slowest user fetch), not sum.
  */
 export async function getArticles(
   options: GetArticlesOptions = {},
@@ -166,8 +147,7 @@ export async function getArticles(
 
   const list = await fetchJson<DummyJsonPostsResponse>(path);
 
-  // Fan out user fetches in parallel. Sequential awaits here would be
-  // O(n) round-trips — the most common perf bug in code reviews.
+  // Fan out user fetches in parallel — sequential awaits would be O(n) round-trips.
   const articles = await Promise.all(
     list.posts.map(async (post) => {
       const author = await getUserById(post.userId);
@@ -175,9 +155,6 @@ export async function getArticles(
     }),
   );
 
-  // Filter [Removed] posts AFTER enrichment so the filter rule lives in
-  // exactly one place. The cost of enriching a soon-to-be-dropped post
-  // is negligible vs. duplicating filter logic at multiple layers.
   const visible = articles.filter((a) => a.title !== REMOVED_TITLE);
 
   return {
@@ -193,53 +170,61 @@ export async function getArticles(
 /**
  * Fetch a single article by id.
  *
- * Sequential by necessity: the user id comes from the post response, so
- * the user fetch can't start until the post resolves. (If we later add
- * sibling resources keyed only on the post id — e.g. comments — those
- * become Promise.all candidates alongside the user fetch.)
+ * Sequential by necessity: userId comes from the post response so the
+ * user fetch can't start until the post resolves.
  *
- * Returns null on upstream failure rather than throwing, so the caller
- * (article/[slug]/page.tsx) can pair it with notFound() under TypeScript's
- * strict null narrowing without try/catch plumbing in the page.
+ * 404 → returns null so the caller can invoke notFound().
+ * 5xx / network error → rethrows so error.tsx catches it.
+ * This distinction matters: a missing article and a broken upstream
+ * are different failure modes and should produce different UI.
  */
-
 export async function getArticleById(id: number): Promise<Article | null> {
+  let post: DummyJsonPost;
+
   try {
-    const post = await fetchJson<DummyJsonPost>(`/posts/${id}`);
-    if (post.title === REMOVED_TITLE) return null;
-    const author = await getUserById(post.userId);
-    return enrichArticle(post, author);
-  } catch {
-    return null;
+    post = await fetchJson<DummyJsonPost>(`/posts/${id}`);
+  } catch (err) {
+    // 404 → article doesn't exist, trigger not-found UI
+    if (err instanceof Error && err.message.includes(" 404 ")) return null;
+    // 5xx / network → let error.tsx handle it
+    throw err;
   }
+
+  if (post.title === REMOVED_TITLE) return null;
+
+  // getUserById failure is always unexpected — rethrow to error boundary.
+  const author = await getUserById(post.userId);
+  return enrichArticle(post, author);
 }
 
 /**
  * All available tags. Used by the homepage tag filter.
- *
- * DummyJSON's /posts/tags endpoint returns a list of objects in newer
- * revisions; the `/tag-list` variant returns a flat string[]. We use
- * the flat one to avoid carrying a wrapper type for a single-purpose call.
  */
 export async function getAllTags(): Promise<readonly string[]> {
   const tags = await fetchJson<readonly string[] | DummyJsonTagsResponse>(
     "/posts/tag-list",
   );
-  // Defensive: tolerate both response shapes the upstream has shipped.
   if (Array.isArray(tags)) return tags;
-    return (tags as DummyJsonTagsResponse).tags;
+  return (tags as DummyJsonTagsResponse).tags;
 }
 
 /**
- * All post ids. Used by `generateStaticParams` for the article detail
- * route — every id here becomes a build-time static page.
+ * All post ids for generateStaticParams.
  *
- * We request only the `id` field via `select` to keep the payload small,
- * and `limit=0` returns the full set on DummyJSON.
+ * Uses limit=0 which DummyJSON treats as "return all". Defensive check:
+ * if the upstream ever changes this behaviour and returns 0 posts, we
+ * fail loudly at build time rather than silently generating 0 pages.
  */
 export async function getAllPostIds(): Promise<readonly number[]> {
   const list = await fetchJson<DummyJsonPostsResponse>(
     "/posts?limit=0&select=id",
   );
+
+  if (list.posts.length === 0) {
+    throw new Error(
+      "getAllPostIds returned 0 posts — DummyJSON may have changed limit=0 behaviour. Build aborted.",
+    );
+  }
+
   return list.posts.map((p) => p.id);
 }
