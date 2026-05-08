@@ -200,18 +200,12 @@ export async function getArticles(
  * (article/[slug]/page.tsx) can pair it with notFound() under TypeScript's
  * strict null narrowing without `try/catch` plumbing in the page.
  */
+
 export async function getArticleById(id: number): Promise<Article | null> {
   try {
     const post = await fetchJson<DummyJsonPost>(`/posts/${id}`);
-    // Post + user in parallel: latency = max(post, user), not post + user.
-    // Note we already have `post` above, so this Promise.all variant is
-    // for symmetry/extension — we issue only one network call here.
-    // (If we later add per-article comments, they slot in here as a
-    // sibling promise without restructuring.)
-    const [author] = await Promise.all([getUserById(post.userId)]);
-
     if (post.title === REMOVED_TITLE) return null;
-
+    const author = await getUserById(post.userId);
     return enrichArticle(post, author);
   } catch {
     return null;
