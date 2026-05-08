@@ -12,22 +12,22 @@ import type { Article } from "@/types";
 jest.mock("next/image", () => ({
   __esModule: true,
   default: ({ src, alt }: ImageProps) => (
-    // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
     <img src={typeof src === "string" ? src : ""} alt={alt} />
   ),
 }));
 
 jest.mock("next/link", () => ({
   __esModule: true,
-  default: ({
-    href,
-    children,
-    ...rest
-  }: LinkProps & { children: ReactNode; "aria-label"?: string }) => (
-    <a href={typeof href === "string" ? href : "#"} {...rest}>
-      {children}
-    </a>
-  ),
+  default: (props: LinkProps & { children: ReactNode; "aria-label"?: string }) => {
+    const { href, children, prefetch, ...rest } = props;
+    void prefetch;
+    const url = typeof href === "string" ? href : "#";
+    return (
+      <a href={url} {...rest}>
+        {children}
+      </a>
+    );
+  },
 }));
 
 // ---------------------------------------------------------------------------

@@ -87,6 +87,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   useEffect(() => {
     const resolved = readStoredTheme() ?? readSystemTheme();
     applyTheme(resolved);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setThemeState(resolved);
   }, []);
 

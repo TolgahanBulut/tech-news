@@ -1,6 +1,6 @@
 # TechPulse — Tech News
 
-A production-grade news application built with Next.js 15, TypeScript, and Tailwind CSS v4. Demonstrates SSG + ISR rendering, dynamic imports tuned for Core Web Vitals, a strict Server/Client component split, and end-to-end SEO discipline.
+A production-grade news application built with Next.js, TypeScript, and Tailwind CSS v4. Demonstrates SSG + ISR rendering, dynamic imports tuned for Core Web Vitals, a strict Server/Client component split, and end-to-end SEO discipline.
 
 ---
 
@@ -18,7 +18,7 @@ App runs on `http://localhost:3000`.
 ````bash
 npm run build          # production build (verifies SSG output)
 npm run start          # serve the production build
-npm run lint           # ESLint
+npm run lint           # eslint .
 npm run typecheck      # tsc --noEmit
 npm test               # Jest + React Testing Library
 npm run test:watch     # Jest in watch mode
@@ -31,12 +31,19 @@ npm run test:coverage  # coverage report
 
 | Concern         | Choice                          | Why                                                                |
 | --------------- | ------------------------------- | ------------------------------------------------------------------ |
-| Framework       | Next.js 15 (App Router)         | RSC, ISR, build-time SSG, segment-level loading/error boundaries   |
+| Framework       | Next.js (App Router)            | RSC, ISR, build-time SSG, segment-level loading/error boundaries   |
 | Language        | TypeScript (strict)             | `noUncheckedIndexedAccess`, zero `any`, readonly domain types      |
 | Styling         | Tailwind CSS v4                 | Token-driven theming via CSS variables, dark mode via class        |
 | Data cache      | TanStack Query v5               | Client-side stale-while-revalidate for tag/page navigation         |
 | API             | DummyJSON                       | No-auth public REST API                                            |
 | Testing         | Jest 29 + React Testing Library | `next/jest` SWC transform, jsdom, role-based queries               |
+
+### A note on the Next.js 16 toolchain
+
+This project was scoped to Next.js 15 in the brief but built with the toolchain currently shipped by `create-next-app`, which is Next 16. The architectural patterns are identical — RSC, ISR, App Router, `generateStaticParams`, `generateMetadata` — but two things differ in the build/lint surface:
+
+- **`next lint` was removed.** Lint now runs as `eslint .` via the native flat config (`eslint.config.mjs`).
+- **`next build` does not auto-detect native flat-config ESLint plugins.** Running lint twice (once at build, once in CI) is redundant, so `next.config.ts` sets `eslint.ignoreDuringBuilds: true`. Lint runs as its own quality gate via `npm run lint`.
 
 ---
 
@@ -44,7 +51,7 @@ npm run test:coverage  # coverage report
 
 ### 1. Rendering: SSG + ISR over SSR
 
-**Decision.** Both the homepage and the article detail page are statically generated with `export const revalidate = 300`. There is no `force-dynamic` and no `cache: "no-store"` anywhere in the codebase.
+**Decision.** Both the homepage and the article detail page declare `export const revalidate = 300`. There is no `force-dynamic` and no `cache: "no-store"` anywhere in the codebase.
 
 **Rationale.** News content changes in minutes, not seconds. The relevant axis is *staleness tolerance*, not *freshness*. Three options were on the table:
 
@@ -54,7 +61,13 @@ npm run test:coverage  # coverage report
 
 A 5-minute window is the trade-off knob: small enough that a breaking story isn't visibly stale, large enough that origin load is negligible. If editorial requires faster propagation later, on-demand revalidation (`revalidatePath`) plugs in without re-architecting.
 
-**Article pages.** `generateStaticParams` returns every known post id at build time, so all articles are pre-rendered. Unknown ids fall through to ISR on first request via Next's default `dynamicParams = true`. Same `revalidate = 300` window keeps content TTL consistent across the site.
+**A note on the homepage classification.** The build output shows `/` as `ƒ` (Dynamic) rather than `●` (SSG). This is correct, expected behavior in Next.js 15+, not a misconfiguration — and it's worth understanding why.
+
+The homepage reads `searchParams` to drive `?tag` and `?page` filtering. Any Server Component that awaits `searchParams` is opted into dynamic rendering at the route level: there is no way for the build to statically generate a page whose output depends on a query string the build doesn't see. The alternative would be to encode filters as route params (`/tag/[tag]/page/[page]`), pre-render every combination, and re-classify as `●` — but that breaks the shareable, refresh-safe `?tag=…&page=…` URL contract the brief specifies and inflates the static-generation time without practical benefit.
+
+What `ƒ` actually means here. With `export const revalidate = 300`, the route still uses ISR via the **Data Cache**: every fetch inside `lib/api.ts` is cached for the revalidation window, so every render of `/?tag=history` after the first hits the in-memory data cache rather than DummyJSON. The user-perceived behavior — instant pages, background revalidation, origin sees a request per filter combination per 5 minutes — is identical to a `●` route. The classification reflects *where the cache lives* (Data Cache vs Full Route Cache), not whether caching exists.
+
+The `/article/[slug]` route is correctly `●`: 251 articles pre-rendered at build time via `generateStaticParams`, with ISR layered on top. Unknown ids fall through to the same ISR window on first request. This is where SSG actually pays off — content with stable URLs that doesn't depend on per-request input.
 
 ---
 
@@ -99,7 +112,7 @@ The provider's initial state depends on browser-only APIs (`matchMedia`, `localS
 
 #### A nuance on the dynamic call site
 
-`next/dynamic` with `ssr: false` cannot be invoked from a Server Component in App Router — Next 15 throws at build time. Both dynamic imports therefore live in tiny `"use client"` shells (`ThemeProviderClient`, `PaginationDynamic`) whose only job is to host the `dynamic()` call. The provider/component itself remains its own module, importable directly elsewhere.
+`next/dynamic` with `ssr: false` cannot be invoked from a Server Component in App Router — Next throws at build time. Both dynamic imports therefore live in tiny `"use client"` shells (`ThemeProviderClient`, `PaginationDynamic`) whose only job is to host the `dynamic()` call. The provider/component itself remains its own module, importable directly elsewhere.
 
 ---
 
@@ -182,11 +195,11 @@ The provider uses `useState(makeQueryClient)` so the client is created exactly o
 tech-news/
 ├── app/
 │   ├── layout.tsx                    # ThemeProvider + QueryProvider + Navbar shell
-│   ├── page.tsx                      # SSG + ISR (revalidate: 300)
+│   ├── page.tsx                      # ISR via Data Cache (revalidate: 300)
 │   ├── loading.tsx
 │   ├── error.tsx
 │   └── article/[slug]/
-│       ├── page.tsx                  # generateStaticParams + generateMetadata
+│       ├── page.tsx                  # SSG via generateStaticParams + ISR
 │       ├── loading.tsx
 │       ├── error.tsx
 │       └── not-found.tsx
@@ -226,15 +239,16 @@ Tests cover the surfaces with the highest defect-cost-per-line: pure utilities a
 - **`utils.test.ts`** — `formatDate`, `buildPaginationMeta`, `clsx`, `buildExcerpt`, `computeReadingTime`. Every defensive branch we shipped (clamps, fallbacks, ceiling rounding, no-whitespace hard-cut) has a corresponding case. `lib/utils.ts` is at 100% branch coverage.
 - **`ArticleCard.test.tsx`** — title, author full name, reading time, first tag, link href, excerpt. `next/image` and `next/link` are locally mocked to plain elements. Queries use `getByRole` over `getByText` where semantic, so tests pass through wrapper changes and fail on a11y regressions.
 
-Integration paths (homepage SSG flow, ISR boundaries, error boundaries) are exercised by `npm run build` and runtime smoke checks; mocking them in unit tests would cost more than it pays.
+Integration paths (homepage ISR flow, error boundaries, article SSG generation) are exercised by `npm run build` and runtime smoke checks; mocking them in unit tests would cost more than it pays.
 
 ---
 
 ## Feature checklist
 
-- [x] Next.js 15 App Router + TypeScript strict mode (`noUncheckedIndexedAccess`, zero `any`)
-- [x] SSG + ISR (`revalidate: 300`) on all routes; no `force-dynamic`
-- [x] `generateStaticParams` for article detail
+- [x] Next.js App Router + TypeScript strict mode (`noUncheckedIndexedAccess`, zero `any`)
+- [x] ISR on all routes (`revalidate: 300`); article detail is SSG (`●`), homepage uses Data Cache ISR (`ƒ`) due to `searchParams` — see "A note on the homepage classification" above
+- [x] No `force-dynamic`, no `cache: "no-store"` anywhere
+- [x] `generateStaticParams` for article detail (251 pages pre-rendered)
 - [x] `generateMetadata` with full OG + Twitter cards
 - [x] Site-wide metadata with `metadataBase`
 - [x] Centralised API layer (`lib/api.ts`) with ISR fetch options
@@ -245,14 +259,15 @@ Integration paths (homepage SSG flow, ISR boundaries, error boundaries) are exer
 - [x] `next/font` self-hosted Inter
 - [x] Dark mode: system preference + `localStorage` override + system-change listener
 - [x] React Query client wired with session-stable instance
-- [x] Tag filter and pagination as URL state (shareable, refresh-safe, CDN-cacheable)
+- [x] Tag filter and pagination as URL state (shareable, refresh-safe)
 - [x] `loading.tsx` + `error.tsx` for both routes
 - [x] `not-found.tsx` for article detail
 - [x] CLS-safe skeletons matching real component geometry
 - [x] Accessibility: `aria-label`, `aria-pressed`, `aria-current`, `role="status"`, `:focus-visible`
 - [x] Jest + React Testing Library, role-based queries, 100% util branch coverage
 - [x] Zero `npx tsc --noEmit` errors
-- [x] No console warnings in dev or prod build
+- [x] Zero ESLint warnings (`npm run lint`)
+- [x] Clean production build (`npm run build`)
 
 ---
 
