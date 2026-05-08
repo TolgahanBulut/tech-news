@@ -6,12 +6,14 @@ A production-grade news application built with Next.js, TypeScript, and Tailwind
 
 ## Quick start
 
-````bash
+```bash
 npm install
 npm run dev
-````
+```
 
 App runs on `http://localhost:3000`.
+
+> **Heads up on next build output:** the homepage classifies as `ƒ` (Dynamic), not `●` (SSG). This is correct ISR-via-Data-Cache behavior because the route reads `searchParams` — see Architecture §1.
 
 ### Other scripts
 

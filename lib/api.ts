@@ -193,12 +193,14 @@ export async function getArticles(
 /**
  * Fetch a single article by id.
  *
- * Post + user fetched in parallel via Promise.all — the canonical
- * "don't await sequentially" pattern this project explicitly tests for.
+ * Sequential by necessity: the user id comes from the post response, so
+ * the user fetch can't start until the post resolves. (If we later add
+ * sibling resources keyed only on the post id — e.g. comments — those
+ * become Promise.all candidates alongside the user fetch.)
  *
  * Returns null on upstream failure rather than throwing, so the caller
  * (article/[slug]/page.tsx) can pair it with notFound() under TypeScript's
- * strict null narrowing without `try/catch` plumbing in the page.
+ * strict null narrowing without try/catch plumbing in the page.
  */
 
 export async function getArticleById(id: number): Promise<Article | null> {
