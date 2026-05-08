@@ -1,36 +1,261 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TechPulse — Tech News
 
-## Getting Started
+A production-grade news application built with Next.js 15, TypeScript, and Tailwind CSS v4. Demonstrates SSG + ISR rendering, dynamic imports tuned for Core Web Vitals, a strict Server/Client component split, and end-to-end SEO discipline.
 
-First, run the development server:
+---
 
-```bash
+## Quick start
+
+````bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+````
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+App runs on `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Other scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+````bash
+npm run build          # production build (verifies SSG output)
+npm run start          # serve the production build
+npm run lint           # ESLint
+npm run typecheck      # tsc --noEmit
+npm test               # Jest + React Testing Library
+npm run test:watch     # Jest in watch mode
+npm run test:coverage  # coverage report
+````
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## Tech stack
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Concern         | Choice                          | Why                                                                |
+| --------------- | ------------------------------- | ------------------------------------------------------------------ |
+| Framework       | Next.js 15 (App Router)         | RSC, ISR, build-time SSG, segment-level loading/error boundaries   |
+| Language        | TypeScript (strict)             | `noUncheckedIndexedAccess`, zero `any`, readonly domain types      |
+| Styling         | Tailwind CSS v4                 | Token-driven theming via CSS variables, dark mode via class        |
+| Data cache      | TanStack Query v5               | Client-side stale-while-revalidate for tag/page navigation         |
+| API             | DummyJSON                       | No-auth public REST API                                            |
+| Testing         | Jest 29 + React Testing Library | `next/jest` SWC transform, jsdom, role-based queries               |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## Architecture decisions
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### 1. Rendering: SSG + ISR over SSR
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+**Decision.** Both the homepage and the article detail page are statically generated with `export const revalidate = 300`. There is no `force-dynamic` and no `cache: "no-store"` anywhere in the codebase.
+
+**Rationale.** News content changes in minutes, not seconds. The relevant axis is *staleness tolerance*, not *freshness*. Three options were on the table:
+
+- **SSR on every request.** Correct freshness, but every visitor pays the upstream-fetch latency. The CDN serves nothing reusable. For a high-traffic news site this is the wrong default — it scales with users instead of with content.
+- **SSG without revalidation.** CDN-perfect, but stale until the next deploy. Wrong for any content that updates outside deploy cadence.
+- **SSG + ISR (chosen).** Build-time static HTML serves instantly from the CDN. After the revalidation window, the *next* request triggers a background regeneration; no user ever waits for a fetch. The tail-latency profile is flat and the origin sees `requests / revalidate_window` traffic instead of `requests / second`.
+
+A 5-minute window is the trade-off knob: small enough that a breaking story isn't visibly stale, large enough that origin load is negligible. If editorial requires faster propagation later, on-demand revalidation (`revalidatePath`) plugs in without re-architecting.
+
+**Article pages.** `generateStaticParams` returns every known post id at build time, so all articles are pre-rendered. Unknown ids fall through to ISR on first request via Next's default `dynamicParams = true`. Same `revalidate = 300` window keeps content TTL consistent across the site.
+
+---
+
+### 2. Server vs Client Component split
+
+**Default: Server Component.** Anything that can render on the server, does. `"use client"` is a deliberate opt-in, not a starting point.
+
+| Component             | Why client                                          |
+| --------------------- | --------------------------------------------------- |
+| `ThemeProvider`       | `localStorage`, `matchMedia` — browser-only APIs    |
+| `ThemeProviderClient` | Hosts `next/dynamic({ ssr: false })` call           |
+| `Navbar`              | Consumes `useTheme()`, handles toggle click         |
+| `TagFilter`           | `useRouter`, `usePathname`, `useSearchParams`       |
+| `Pagination`          | Same as above                                       |
+| `QueryProvider`       | Provides React Query context                        |
+| `error.tsx` files     | Next's error-boundary contract requires it          |
+
+Everything else — `ArticleCard`, `ArticleGrid`, `Skeleton`, page components — is a Server Component. The card grid is the bulk of the homepage payload; keeping it server-rendered eliminates the largest hydration cost we'd otherwise carry.
+
+---
+
+### 3. Dynamic imports — what and why
+
+Two components use `next/dynamic`. Both decisions are tied to specific Core Web Vitals goals.
+
+#### `Pagination` — `next/dynamic({ ssr: false })`
+
+The paginator sits below the article grid, well outside the LCP fold on every viewport. Excluding it from the initial JS bundle and from the SSR HTML keeps two metrics moving in the right direction:
+
+- **LCP.** Less script to parse before the largest image renders.
+- **TBT / hydration cost.** No event handlers attached above the fold for a control no one is about to use.
+
+The trade-off is a brief pop-in shortly after hydration. A stable-height `loading` placeholder reserves the paginator's vertical space, so the lazy mount produces zero CLS — the user sees the bar appear in place, not the page jump.
+
+#### `ThemeProvider` — `next/dynamic({ ssr: false })`
+
+The provider's initial state depends on browser-only APIs (`matchMedia`, `localStorage`) that don't exist on the server. SSR-rendering a default theme and correcting on the client produces a hydration mismatch and a brief flash of the wrong theme — the classic dark-mode FOUC.
+
+`ssr: false` skips the server render for this subtree entirely. The cost is one extra client-only render frame; the benefit is zero hydration warnings and the entire HTML stays CDN-cacheable.
+
+**Trade-off acknowledged.** The "perfect" fix is the inline `<head>` script pattern (à la `next-themes`) that sets the `.dark` class before React hydrates, which would close the one-frame mount window completely. The brief specifies the dynamic-import approach, so this implementation honors it. `<html suppressHydrationWarning>` keeps the console clean during the resolve window, and the `Navbar` toggle renders a fixed-size placeholder until `theme` resolves to prevent CLS.
+
+#### A nuance on the dynamic call site
+
+`next/dynamic` with `ssr: false` cannot be invoked from a Server Component in App Router — Next 15 throws at build time. Both dynamic imports therefore live in tiny `"use client"` shells (`ThemeProviderClient`, `PaginationDynamic`) whose only job is to host the `dynamic()` call. The provider/component itself remains its own module, importable directly elsewhere.
+
+---
+
+### 4. Data fetching
+
+````
+Server (Next runtime)              Client (browser)
+┌──────────────────────────┐       ┌────────────────────────────┐
+│ lib/api.ts               │       │ React Query (per session)  │
+│   fetchJson + ISR        │       │   stale: 5min              │
+│   Promise.all enrichment │       │   gcTime: 10min            │
+│   domain translation     │       │   refetchOnWindow: false   │
+└──────────────┬───────────┘       └────────────┬───────────────┘
+               │                                │
+               └─────── single contract ────────┘
+                       (Article, ArticleListResult)
+````
+
+- **Components never call `fetch` directly.** Every outbound HTTP call is funnelled through `lib/api.ts`'s `fetchJson` helper, which centralises the ISR options (`{ next: { revalidate: 300 } }`), error handling, and JSON parsing. No call site can misconfigure cache.
+- **Post + user enrichment via `Promise.all`.** Sequential `await` would double end-to-end latency. The list endpoint fans out N parallel `/users/{id}` requests; total latency is `max(post fetch, slowest user fetch)`, not the sum. Next dedupes identical fetches within a request, so authors with multiple articles cost one request per render.
+- **Wire / domain boundary.** `DummyJsonPost` and `DummyJsonUser` are adapter-internal types; only `lib/api.ts` may import them. A private `enrichArticle(post, user)` translator builds the domain `Article`. If DummyJSON's response shape changes, the blast radius is one file.
+- **`getArticleById` returns `null` on failure**, which enables the spec's null-narrowing pattern in pages: `if (!article) notFound()` narrows `article` to `Article` for the rest of the function. No try/catch plumbing in routes, no non-null assertions.
+- **Deterministic `publishedAt`.** The fake date is derived from the post id (`anchor − id × 1h`). `Math.random` would break SSG: each rebuild would emit different OG metadata and the CDN would serve inconsistent snapshots across edge nodes. Determinism is correctness here, not aesthetics.
+
+#### React Query's role
+
+Server fetches via `lib/api.ts` drive the *initial render* — that's what gets statically generated. React Query is wired for *client-side* tag/page navigation: the URL changes, RSC streams in, and the QueryClient holds onto previously-fetched data so toggling between filters feels instantaneous. `staleTime: 5min` matches the ISR window so client and server agree on freshness.
+
+The provider uses `useState(makeQueryClient)` so the client is created exactly once per browser session, and a fresh instance per server render — preventing cross-request cache bleed during SSR.
+
+---
+
+### 5. SEO
+
+- **Site-wide metadata** in `app/layout.tsx`: `metadataBase`, default + template title, description, OpenGraph (`type: website`, `siteName`), Twitter card, robots.
+- **Per-article `generateMetadata`**: title, description (the excerpt), authors, keywords, OpenGraph (`type: article`, image with explicit 800×450 dimensions, `publishedTime`, `authors`, `tags`), Twitter `summary_large_image`.
+- **`generateMetadata` shares fetches with the page render.** Next dedupes identical fetches within a request, so the article is fetched once per render even though metadata and the page body both ask for it.
+- **Semantic markup.** `<article>`, `<header>`, `<footer>`, `<time dateTime>`. The HTML5 sectioning model carries SEO weight and accessibility wins simultaneously.
+
+---
+
+### 6. Performance
+
+| Lever                            | Implementation                                          |
+| -------------------------------- | ------------------------------------------------------- |
+| LCP                              | `priority` on first 3 cards + article hero only         |
+| Lazy loading                     | Default `loading="lazy"` for non-priority `next/image`  |
+| Bandwidth                        | `sizes` attribute matches the responsive grid math      |
+| CLS                              | Aspect-ratio containers, `line-clamp`, fixed-size placeholders for skeletons + theme toggle |
+| Bundle                           | Card grid is RSC-only, paginator deferred via dynamic import |
+| Font                             | `next/font` self-hosts Inter, `display: swap`           |
+| Prefetch hygiene                 | `prefetch={false}` on card links — 12 cards otherwise mean 12 RSC payload fetches per homepage render |
+| URL canonicalisation             | `?page=1` dropped to one URL → one CDN cache entry      |
+
+---
+
+### 7. Dark mode
+
+- System preference read from `matchMedia("(prefers-color-scheme: dark)")` on mount.
+- User override persisted to `localStorage` (`techpulse:theme`).
+- OS theme changes are honoured *only* when the user hasn't picked one — explicit choice wins permanently.
+- Theme applied via `.dark` class on `<html>` (Tailwind v4 `@custom-variant`) and `style.colorScheme` so native form controls and scrollbars match.
+- `<html suppressHydrationWarning>` quiets the console during the post-mount theme resolve window.
+
+---
+
+### 8. Accessibility
+
+- `aria-label` on all icon-only buttons; `aria-pressed` on toggle controls; `aria-current="page"` on the active paginator button.
+- `role="status"` + `aria-live="polite"` on skeleton wrappers — one announcement per loading region, not per skeleton.
+- Decorative images use `alt=""` (the title link already announces the article); ellipsis glyphs are `aria-hidden` with `sr-only` descriptive text.
+- `:focus-visible` outline (defined in `globals.css`) — invisible to mouse users, prominent for keyboard navigation.
+- Semantic HTML over `div` soup: `<nav aria-label="Pagination">`, `<article>`, `<header>`, `<time dateTime>`.
+
+---
+
+## Project structure
+
+````
+tech-news/
+├── app/
+│   ├── layout.tsx                    # ThemeProvider + QueryProvider + Navbar shell
+│   ├── page.tsx                      # SSG + ISR (revalidate: 300)
+│   ├── loading.tsx
+│   ├── error.tsx
+│   └── article/[slug]/
+│       ├── page.tsx                  # generateStaticParams + generateMetadata
+│       ├── loading.tsx
+│       ├── error.tsx
+│       └── not-found.tsx
+├── components/
+│   ├── layout/
+│   │   ├── Navbar.tsx                # client — useTheme()
+│   │   ├── ThemeProvider.tsx         # client — localStorage + matchMedia
+│   │   └── ThemeProviderClient.tsx   # client — hosts next/dynamic({ ssr:false })
+│   ├── article/
+│   │   ├── ArticleCard.tsx           # server — image optimisation
+│   │   └── ArticleGrid.tsx           # server
+│   └── ui/
+│       ├── Skeleton.tsx              # server — primitive + composed skeletons
+│       ├── Pagination.tsx            # client — ellipsis paginator
+│       ├── PaginationDynamic.tsx     # client — next/dynamic shell
+│       ├── TagFilter.tsx             # client — URL-driven filter
+│       └── ErrorMessage.tsx          # client — error boundary UI
+├── lib/
+│   ├── api.ts                        # the fetch boundary
+│   ├── queryClient.ts
+│   └── utils.ts                      # buildExcerpt, computeReadingTime, …
+├── providers/
+│   └── QueryProvider.tsx
+├── types/
+│   └── index.ts                      # Domain + wire types
+└── __tests__/
+    ├── utils.test.ts
+    └── ArticleCard.test.tsx
+````
+
+---
+
+## Testing strategy
+
+Tests cover the surfaces with the highest defect-cost-per-line: pure utilities and the most-rendered component.
+
+- **`utils.test.ts`** — `formatDate`, `buildPaginationMeta`, `clsx`, `buildExcerpt`, `computeReadingTime`. Every defensive branch we shipped (clamps, fallbacks, ceiling rounding, no-whitespace hard-cut) has a corresponding case. `lib/utils.ts` is at 100% branch coverage.
+- **`ArticleCard.test.tsx`** — title, author full name, reading time, first tag, link href, excerpt. `next/image` and `next/link` are locally mocked to plain elements. Queries use `getByRole` over `getByText` where semantic, so tests pass through wrapper changes and fail on a11y regressions.
+
+Integration paths (homepage SSG flow, ISR boundaries, error boundaries) are exercised by `npm run build` and runtime smoke checks; mocking them in unit tests would cost more than it pays.
+
+---
+
+## Feature checklist
+
+- [x] Next.js 15 App Router + TypeScript strict mode (`noUncheckedIndexedAccess`, zero `any`)
+- [x] SSG + ISR (`revalidate: 300`) on all routes; no `force-dynamic`
+- [x] `generateStaticParams` for article detail
+- [x] `generateMetadata` with full OG + Twitter cards
+- [x] Site-wide metadata with `metadataBase`
+- [x] Centralised API layer (`lib/api.ts`) with ISR fetch options
+- [x] `Promise.all` for post+user parallel enrichment
+- [x] Wire/domain type boundary (`DummyJsonPost` → `Article`)
+- [x] `next/dynamic` for `Pagination` and `ThemeProvider` (justified above)
+- [x] `next/image` with `priority` discipline, `sizes`, aspect-ratio containers
+- [x] `next/font` self-hosted Inter
+- [x] Dark mode: system preference + `localStorage` override + system-change listener
+- [x] React Query client wired with session-stable instance
+- [x] Tag filter and pagination as URL state (shareable, refresh-safe, CDN-cacheable)
+- [x] `loading.tsx` + `error.tsx` for both routes
+- [x] `not-found.tsx` for article detail
+- [x] CLS-safe skeletons matching real component geometry
+- [x] Accessibility: `aria-label`, `aria-pressed`, `aria-current`, `role="status"`, `:focus-visible`
+- [x] Jest + React Testing Library, role-based queries, 100% util branch coverage
+- [x] Zero `npx tsc --noEmit` errors
+- [x] No console warnings in dev or prod build
+
+---
+
+## License
+
+This is a technical assessment project. Not licensed for redistribution.
