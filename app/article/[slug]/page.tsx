@@ -18,7 +18,9 @@ export const revalidate = 300;
 
 export async function generateStaticParams(): Promise<{ slug: string }[]> {
   const ids = await getAllPostIds();
-  return ids.map((id) => ({ slug: String(id) }));
+  // Pre-render the first 20 articles at build time; remaining pages
+  // are generated on first visit via ISR (revalidate: 300).
+  return ids.slice(0, 20).map((id) => ({ slug: String(id) }));
 }
 
 // ---------------------------------------------------------------------------

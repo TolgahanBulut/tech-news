@@ -10,10 +10,12 @@ const nextConfig: NextConfig = {
   },
   poweredByHeader: false,
   eslint: {
-    // Lint runs as a separate CI step via `npm run lint`.
-    // next build's lint check uses a legacy detection path that
-    // doesn't recognize native flat config plugins.
     ignoreDuringBuilds: true,
+  },
+  // Limit concurrent page generation to avoid rate-limiting from DummyJSON
+  experimental: {
+    workerThreads: false,
+    cpus: 1,
   },
 };
 

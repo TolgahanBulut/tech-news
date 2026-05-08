@@ -257,7 +257,7 @@ Integration paths (homepage ISR flow, error boundaries, article SSG generation) 
 - [x] Next.js App Router + TypeScript strict mode (`noUncheckedIndexedAccess`, zero `any`)
 - [x] ISR on all routes (`revalidate: 300`); article detail is SSG (`●`), homepage uses Data Cache ISR (`ƒ`) due to `searchParams` — see "A note on the homepage classification" above
 - [x] No `force-dynamic`, no `cache: "no-store"` anywhere
-- [x] `generateStaticParams` for article detail (251 pages pre-rendered)
+- [x] `generateStaticParams` for article detail (first 20 articles pre-rendered at build time, remaining via ISR)
 - [x] `generateMetadata` with full OG + Twitter cards
 - [x] Site-wide metadata with `metadataBase`
 - [x] Centralised API layer (`lib/api.ts`) with ISR fetch options
