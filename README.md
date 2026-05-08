@@ -36,7 +36,7 @@ npm run test:coverage  # coverage report
 | Framework       | Next.js (App Router)            | RSC, ISR, build-time SSG, segment-level loading/error boundaries   |
 | Language        | TypeScript (strict)             | `noUncheckedIndexedAccess`, zero `any`, readonly domain types      |
 | Styling         | Tailwind CSS v4                 | Token-driven theming via CSS variables, dark mode via class        |
-| Data cache      | TanStack Query v5               | Client-side stale-while-revalidate for tag/page navigation         |
+| Data cache      | TanStack Query v5               | Client-side tag list cache in TagFilter; staleTime matches ISR window      |
 | API             | DummyJSON                       | No-auth public REST API                                            |
 | Testing         | Jest 29 + React Testing Library | `next/jest` SWC transform, jsdom, role-based queries               |
 
@@ -136,14 +136,20 @@ Server (Next runtime)              Client (browser)
 - **Components never call `fetch` directly.** Every outbound HTTP call is funnelled through `lib/api.ts`'s `fetchJson` helper, which centralises the ISR options (`{ next: { revalidate: 300 } }`), error handling, and JSON parsing. No call site can misconfigure cache.
 - **Post + user enrichment via `Promise.all`.** Sequential `await` would double end-to-end latency. The list endpoint fans out N parallel `/users/{id}` requests; total latency is `max(post fetch, slowest user fetch)`, not the sum. Next dedupes identical fetches within a request, so authors with multiple articles cost one request per render.
 - **Wire / domain boundary.** `DummyJsonPost` and `DummyJsonUser` are adapter-internal types; only `lib/api.ts` may import them. A private `enrichArticle(post, user)` translator builds the domain `Article`. If DummyJSON's response shape changes, the blast radius is one file.
-- **`getArticleById` returns `null` on failure**, which enables the spec's null-narrowing pattern in pages: `if (!article) notFound()` narrows `article` to `Article` for the rest of the function. No try/catch plumbing in routes, no non-null assertions.
+
+- **`getArticleById` distinguishes 404 from 5xx.** A 404 returns `null` so the caller can invoke `notFound()` and render the custom not-found page. A 5xx or network error rethrows so `error.tsx` catches it. These are different failure modes — a missing article and a broken upstream should produce different UI.
+
 - **Deterministic `publishedAt`.** The fake date is derived from the post id (`anchor − id × 1h`). `Math.random` would break SSG: each rebuild would emit different OG metadata and the CDN would serve inconsistent snapshots across edge nodes. Determinism is correctness here, not aesthetics.
 
 #### React Query's role
 
-Server fetches via `lib/api.ts` drive the *initial render* — that's what gets statically generated. React Query is wired for *client-side* tag/page navigation: the URL changes, RSC streams in, and the QueryClient holds onto previously-fetched data so toggling between filters feels instantaneous. `staleTime: 5min` matches the ISR window so client and server agree on freshness.
+Server fetches via `lib/api.ts` drive the *initial render* — that's what gets statically generated and ISR-cached. React Query handles one specific client-side concern: the **tag list in `TagFilter`**.
 
-The provider uses `useState(makeQueryClient)` so the client is created exactly once per browser session, and a fresh instance per server render — preventing cross-request cache bleed during SSR.
+On first render, the server passes the tag list as `initialTags` (fetched via RSC). React Query uses this as `placeholderData` and revalidates it in the background after 5 minutes — matching the ISR window so the client never shows a tag that the server would also consider stale. This means tag navigation on subsequent visits is instant (no server round-trip) while remaining consistent with the server's cache TTL.
+
+The `staleTime: 5 * 60 * 1000` in `TagFilter` and the `staleTime: 5 * 60 * 1000` in `queryClient.ts` are intentionally aligned. If the ISR window changes, both update together.
+
+The provider uses `useState(makeQueryClient)` so the client is created exactly once per browser session, and a fresh instance per server render — preventing cross-request cache bleed.
 
 ---
 
@@ -238,6 +244,7 @@ tech-news/
 
 Tests cover the surfaces with the highest defect-cost-per-line: pure utilities and the most-rendered component.
 
+- **`TagFilter.test.tsx`** — URL navigation behavior: tag selection updates the URL with correct params and resets pagination.
 - **`utils.test.ts`** — `formatDate`, `buildPaginationMeta`, `clsx`, `buildExcerpt`, `computeReadingTime`. Every defensive branch we shipped (clamps, fallbacks, ceiling rounding, no-whitespace hard-cut) has a corresponding case. `lib/utils.ts` is at 100% branch coverage.
 - **`ArticleCard.test.tsx`** — title, author full name, reading time, first tag, link href, excerpt. `next/image` and `next/link` are locally mocked to plain elements. Queries use `getByRole` over `getByText` where semantic, so tests pass through wrapper changes and fail on a11y regressions.
 
@@ -260,7 +267,7 @@ Integration paths (homepage ISR flow, error boundaries, article SSG generation) 
 - [x] `next/image` with `priority` discipline, `sizes`, aspect-ratio containers
 - [x] `next/font` self-hosted Inter
 - [x] Dark mode: system preference + `localStorage` override + system-change listener
-- [x] React Query client wired with session-stable instance
+- [x] React Query used for client-side tag list cache in TagFilter (`placeholderData` from server, revalidates after ISR window)
 - [x] Tag filter and pagination as URL state (shareable, refresh-safe)
 - [x] `loading.tsx` + `error.tsx` for both routes
 - [x] `not-found.tsx` for article detail
