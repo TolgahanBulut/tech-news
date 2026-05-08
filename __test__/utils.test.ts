@@ -122,6 +122,13 @@ describe("buildExcerpt", () => {
   it("collapses whitespace before measuring", () => {
     expect(buildExcerpt("a\n\nb   c")).toBe("a b c");
   });
+
+  it("hard-cuts when the window contains no whitespace", () => {
+    const giant = "x".repeat(300);
+    const out = buildExcerpt(giant);
+    expect(out.endsWith("…")).toBe(true);
+    expect(out.length).toBe(161); // 160 chars + ellipsis
+    });
 });
 
 // ---------------------------------------------------------------------------
