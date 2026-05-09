@@ -3,6 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { startTransition, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { getAllTags } from "@/lib/api";
 import { clsx } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -10,21 +11,11 @@ import { clsx } from "@/lib/utils";
 // ---------------------------------------------------------------------------
 
 interface TagFilterProps {
-  // Server-rendered initial tags passed as prop; React Query keeps them
-  // fresh client-side without a server round-trip on every navigation.
+  // Server-rendered initial tags passed as prop; React Query revalidates
+  // client-side after the ISR window (300s) via lib/api.ts — no direct
+  // fetch calls in the component.
   readonly initialTags: readonly string[];
   readonly activeTag?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Client-side tags fetcher
-// ---------------------------------------------------------------------------
-
-async function fetchTags(): Promise<string[]> {
-  const res = await fetch("https://dummyjson.com/posts/tag-list");
-  if (!res.ok) throw new Error(`Failed to fetch tags: ${res.status}`);
-  const data = await res.json();
-  return Array.isArray(data) ? data : data.tags ?? [];
 }
 
 // ---------------------------------------------------------------------------
@@ -36,15 +27,14 @@ export function TagFilter({ initialTags, activeTag }: TagFilterProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  // initialTags from server render is used as placeholder data so the
-  // filter is immediately visible. React Query revalidates in the background
-  // after 5 minutes (matches ISR window), keeping the tag list fresh without
-  // a server round-trip on every client navigation.
+  // Uses getAllTags from lib/api.ts — respects the "no direct fetch in
+  // components" boundary. placeholderData shows server tags instantly;
+  // React Query revalidates after staleTime matches the ISR window.
   const { data: tags = initialTags } = useQuery({
     queryKey: ["tags"],
-    queryFn: fetchTags,
+    queryFn: () => getAllTags(),
     placeholderData: initialTags as string[],
-    staleTime: 5 * 60 * 1000, // matches ISR revalidate window
+    staleTime: 5 * 60 * 1000,
   });
 
   const navigate = useCallback(

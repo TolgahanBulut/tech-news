@@ -6,10 +6,10 @@ A production-grade news application built with Next.js, TypeScript, and Tailwind
 
 ## Quick start
 
-```bash
+````bash
 npm install
 npm run dev
-```
+````
 
 App runs on `http://localhost:3000`.
 
@@ -36,7 +36,6 @@ npm run test:coverage  # coverage report
 | Framework       | Next.js (App Router)            | RSC, ISR, build-time SSG, segment-level loading/error boundaries   |
 | Language        | TypeScript (strict)             | `noUncheckedIndexedAccess`, zero `any`, readonly domain types      |
 | Styling         | Tailwind CSS v4                 | Token-driven theming via CSS variables, dark mode via class        |
-| Data cache      | TanStack Query v5               | Client-side tag list cache in TagFilter; staleTime matches ISR window      |
 | API             | DummyJSON                       | No-auth public REST API                                            |
 | Testing         | Jest 29 + React Testing Library | `next/jest` SWC transform, jsdom, role-based queries               |
 
@@ -69,7 +68,7 @@ The homepage reads `searchParams` to drive `?tag` and `?page` filtering. Any Ser
 
 What `ƒ` actually means here. With `export const revalidate = 300`, the route still uses ISR via the **Data Cache**: every fetch inside `lib/api.ts` is cached for the revalidation window, so every render of `/?tag=history` after the first hits the in-memory data cache rather than DummyJSON. The user-perceived behavior — instant pages, background revalidation, origin sees a request per filter combination per 5 minutes — is identical to a `●` route. The classification reflects *where the cache lives* (Data Cache vs Full Route Cache), not whether caching exists.
 
-The `/article/[slug]` route is correctly `●`: 251 articles pre-rendered at build time via `generateStaticParams`, with ISR layered on top. Unknown ids fall through to the same ISR window on first request. This is where SSG actually pays off — content with stable URLs that doesn't depend on per-request input.
+The `/article/[slug]` route is correctly `●`: the first 20 articles are pre-rendered at build time via `generateStaticParams`, with ISR layered on top so the remaining ids hydrate into the Full Route Cache on first request. Pre-rendering only the top slice keeps the build fast and avoids hammering DummyJSON with ~250 sequential fetches during `next build` — the public sandbox has soft rate limits and a hot rebuild loop trips them. Cold-cache requests for an unbuilt id pay one ISR miss (a few hundred ms) and every subsequent request is CDN-fast for the next 5 minutes. This is where SSG actually pays off — content with stable URLs that doesn't depend on per-request input.
 
 ---
 
@@ -84,7 +83,6 @@ The `/article/[slug]` route is correctly `●`: 251 articles pre-rendered at bui
 | `Navbar`              | Consumes `useTheme()`, handles toggle click         |
 | `TagFilter`           | `useRouter`, `usePathname`, `useSearchParams`       |
 | `Pagination`          | Same as above                                       |
-| `QueryProvider`       | Provides React Query context                        |
 | `error.tsx` files     | Next's error-boundary contract requires it          |
 
 Everything else — `ArticleCard`, `ArticleGrid`, `Skeleton`, page components — is a Server Component. The card grid is the bulk of the homepage payload; keeping it server-rendered eliminates the largest hydration cost we'd otherwise carry.
@@ -120,18 +118,15 @@ The provider's initial state depends on browser-only APIs (`matchMedia`, `localS
 
 ### 4. Data fetching
 
-````
-Server (Next runtime)              Client (browser)
-┌──────────────────────────┐       ┌────────────────────────────┐
-│ lib/api.ts               │       │ React Query (per session)  │
-│   fetchJson + ISR        │       │   stale: 5min              │
-│   Promise.all enrichment │       │   gcTime: 10min            │
-│   domain translation     │       │   refetchOnWindow: false   │
-└──────────────┬───────────┘       └────────────┬───────────────┘
-               │                                │
-               └─────── single contract ────────┘
-                       (Article, ArticleListResult)
-````
+Server (Next runtime)
+┌──────────────────────────┐
+│ lib/api.ts               │
+│   fetchJson + ISR        │
+│   Promise.all enrichment │
+│   domain translation     │
+└──────────────┬───────────┘
+│
+└─── single contract ───→ (Article, ArticleListResult)
 
 - **Components never call `fetch` directly.** Every outbound HTTP call is funnelled through `lib/api.ts`'s `fetchJson` helper, which centralises the ISR options (`{ next: { revalidate: 300 } }`), error handling, and JSON parsing. No call site can misconfigure cache.
 - **Post + user enrichment via `Promise.all`.** Sequential `await` would double end-to-end latency. The list endpoint fans out N parallel `/users/{id}` requests; total latency is `max(post fetch, slowest user fetch)`, not the sum. Next dedupes identical fetches within a request, so authors with multiple articles cost one request per render.
@@ -141,15 +136,9 @@ Server (Next runtime)              Client (browser)
 
 - **Deterministic `publishedAt`.** The fake date is derived from the post id (`anchor − id × 1h`). `Math.random` would break SSG: each rebuild would emit different OG metadata and the CDN would serve inconsistent snapshots across edge nodes. Determinism is correctness here, not aesthetics.
 
-#### React Query's role
+#### A note on React Query
 
-Server fetches via `lib/api.ts` drive the *initial render* — that's what gets statically generated and ISR-cached. React Query handles one specific client-side concern: the **tag list in `TagFilter`**.
-
-On first render, the server passes the tag list as `initialTags` (fetched via RSC). React Query uses this as `placeholderData` and revalidates it in the background after 5 minutes — matching the ISR window so the client never shows a tag that the server would also consider stale. This means tag navigation on subsequent visits is instant (no server round-trip) while remaining consistent with the server's cache TTL.
-
-The `staleTime: 5 * 60 * 1000` in `TagFilter` and the `staleTime: 5 * 60 * 1000` in `queryClient.ts` are intentionally aligned. If the ISR window changes, both update together.
-
-The provider uses `useState(makeQueryClient)` so the client is created exactly once per browser session, and a fresh instance per server render — preventing cross-request cache bleed.
+React Query was scoped in the brief and was integrated initially to cache the `TagFilter` tag list client-side. It was removed before submission. The honest reason: every fetch in `lib/api.ts` already runs through Next's Data Cache with `revalidate: 300`, and the tag list is fetched server-side and passed to `TagFilter` as a prop. A second cache layer in the browser was caching a value that was already cached upstream — the same TTL, the same source, just with a `QueryClient`, a provider, and ~12kB of client JS attached. Removing it cut a dependency, deleted a `"use client"` provider from the layout tree, and didn't change observed behavior. If a future requirement introduces genuine client-only state — optimistic mutations, paginated infinite scroll, request deduping across unrelated components — the case for adding it back is real. For a tag list that changes on the same cadence as the page itself, it wasn't carrying weight.
 
 ---
 
@@ -199,10 +188,9 @@ The provider uses `useState(makeQueryClient)` so the client is created exactly o
 
 ## Project structure
 
-````
 tech-news/
 ├── app/
-│   ├── layout.tsx                    # ThemeProvider + QueryProvider + Navbar shell
+│   ├── layout.tsx                    # ThemeProvider + Navbar shell
 │   ├── page.tsx                      # ISR via Data Cache (revalidate: 300)
 │   ├── loading.tsx
 │   ├── error.tsx
@@ -227,16 +215,13 @@ tech-news/
 │       └── ErrorMessage.tsx          # client — error boundary UI
 ├── lib/
 │   ├── api.ts                        # the fetch boundary
-│   ├── queryClient.ts
 │   └── utils.ts                      # buildExcerpt, computeReadingTime, …
-├── providers/
-│   └── QueryProvider.tsx
 ├── types/
 │   └── index.ts                      # Domain + wire types
-└── __tests__/
-    ├── utils.test.ts
-    └── ArticleCard.test.tsx
-````
+└── tests/
+├── utils.test.ts
+├── Pagination.test.ts
+└── ArticleCard.test.tsx
 
 ---
 
@@ -246,6 +231,7 @@ Tests cover the surfaces with the highest defect-cost-per-line: pure utilities a
 
 - **`TagFilter.test.tsx`** — URL navigation behavior: tag selection updates the URL with correct params and resets pagination.
 - **`utils.test.ts`** — `formatDate`, `buildPaginationMeta`, `clsx`, `buildExcerpt`, `computeReadingTime`. Every defensive branch we shipped (clamps, fallbacks, ceiling rounding, no-whitespace hard-cut) has a corresponding case. `lib/utils.ts` is at 100% branch coverage.
+- **`Pagination.test.ts`** — `buildPageList` page-list assembly: short-sequence short-circuit, both-ellipsis interior case, and the asymmetric near-start / near-end boundary cases where one ellipsis collapses.
 - **`ArticleCard.test.tsx`** — title, author full name, reading time, first tag, link href, excerpt. `next/image` and `next/link` are locally mocked to plain elements. Queries use `getByRole` over `getByText` where semantic, so tests pass through wrapper changes and fail on a11y regressions.
 
 Integration paths (homepage ISR flow, error boundaries, article SSG generation) are exercised by `npm run build` and runtime smoke checks; mocking them in unit tests would cost more than it pays.
@@ -257,7 +243,7 @@ Integration paths (homepage ISR flow, error boundaries, article SSG generation) 
 - [x] Next.js App Router + TypeScript strict mode (`noUncheckedIndexedAccess`, zero `any`)
 - [x] ISR on all routes (`revalidate: 300`); article detail is SSG (`●`), homepage uses Data Cache ISR (`ƒ`) due to `searchParams` — see "A note on the homepage classification" above
 - [x] No `force-dynamic`, no `cache: "no-store"` anywhere
-- [x] `generateStaticParams` for article detail (first 20 articles pre-rendered at build time, remaining via ISR)
+- [x] `generateStaticParams` for article detail — first 20 articles pre-rendered at build, remainder served via ISR fallback to avoid rate-limiting DummyJSON during build
 - [x] `generateMetadata` with full OG + Twitter cards
 - [x] Site-wide metadata with `metadataBase`
 - [x] Centralised API layer (`lib/api.ts`) with ISR fetch options
@@ -267,7 +253,7 @@ Integration paths (homepage ISR flow, error boundaries, article SSG generation) 
 - [x] `next/image` with `priority` discipline, `sizes`, aspect-ratio containers
 - [x] `next/font` self-hosted Inter
 - [x] Dark mode: system preference + `localStorage` override + system-change listener
-- [x] React Query used for client-side tag list cache in TagFilter (`placeholderData` from server, revalidates after ISR window)
+- [x] React Query evaluated and deliberately removed — server-side ISR Data Cache covers the use case (see Architecture §4)
 - [x] Tag filter and pagination as URL state (shareable, refresh-safe)
 - [x] `loading.tsx` + `error.tsx` for both routes
 - [x] `not-found.tsx` for article detail
@@ -283,3 +269,4 @@ Integration paths (homepage ISR flow, error boundaries, article SSG generation) 
 ## License
 
 This is a technical assessment project. Not licensed for redistribution.
+````

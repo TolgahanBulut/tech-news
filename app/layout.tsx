@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { ThemeProviderClient } from "@/components/layout/ThemeProviderClient";
 import { Navbar } from "@/components/layout/Navbar";
-import { QueryProvider } from "@/providers/QueryProvider";
 import "./globals.css";
 
 // ---------------------------------------------------------------------------
@@ -57,14 +56,12 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning className={inter.variable}>
       <body>
-        <QueryProvider>
-          <ThemeProviderClient>
-            <Navbar />
-            <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
-              {children}
-            </main>
-          </ThemeProviderClient>
-        </QueryProvider>
+        <ThemeProviderClient>
+          <Navbar />
+          <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+            {children}
+          </main>
+        </ThemeProviderClient>
       </body>
     </html>
   );

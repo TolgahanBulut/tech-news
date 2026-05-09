@@ -18,10 +18,14 @@ interface PaginationProps {
 // Page-list builder
 // ---------------------------------------------------------------------------
 
-type PageItem = number | "ellipsis-left" | "ellipsis-right";
+export type PageItem = number | "ellipsis-left" | "ellipsis-right";
 
 // 7-slot window: first, [maybe …], current-1, current, current+1, [maybe …], last
-function buildPageList(current: number, total: number): readonly PageItem[] {
+// Exported for unit testing.
+export function buildPageList(
+  current: number,
+  total: number,
+): readonly PageItem[] {
   if (total <= 7) {
     return Array.from({ length: total }, (_, i) => i + 1);
   }
