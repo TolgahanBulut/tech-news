@@ -37,6 +37,7 @@ npm run test:coverage  # coverage report
 | Language        | TypeScript (strict)             | `noUncheckedIndexedAccess`, zero `any`, readonly domain types      |
 | Styling         | Tailwind CSS v4                 | Token-driven theming via CSS variables, dark mode via class        |
 | API             | DummyJSON                       | No-auth public REST API                                            |
+| Data cache      | TanStack Query v5 | Client-side tag list cache in TagFilter; staleTime matches ISR revalidate window |
 | Testing         | Jest 29 + React Testing Library | `next/jest` SWC transform, jsdom, role-based queries               |
 
 ### A note on the Next.js 16 toolchain
@@ -259,7 +260,7 @@ Integration paths (homepage ISR flow, error boundaries, article SSG generation) 
 - [x] `next/image` with `priority` discipline, `sizes`, aspect-ratio containers
 - [x] `next/font` self-hosted Inter
 - [x] Dark mode: system preference + `localStorage` override + system-change listener
-- [x] React Query evaluated and deliberately removed — server-side ISR Data Cache covers the use case (see Architecture §4)
+- [x] React Query (TanStack Query v5) — client-side tag list cache in TagFilter via getAllTags from lib/api.ts; staleTime matches ISR window
 - [x] Tag filter and pagination as URL state (shareable, refresh-safe)
 - [x] `loading.tsx` + `error.tsx` for both routes
 - [x] `not-found.tsx` for article detail
