@@ -136,9 +136,15 @@ Server (Next runtime)
 
 - **Deterministic `publishedAt`.** The fake date is derived from the post id (`anchor − id × 1h`). `Math.random` would break SSG: each rebuild would emit different OG metadata and the CDN would serve inconsistent snapshots across edge nodes. Determinism is correctness here, not aesthetics.
 
-#### A note on React Query
+#### React Query's role
 
-React Query was scoped in the brief and was integrated initially to cache the `TagFilter` tag list client-side. It was removed before submission. The honest reason: every fetch in `lib/api.ts` already runs through Next's Data Cache with `revalidate: 300`, and the tag list is fetched server-side and passed to `TagFilter` as a prop. A second cache layer in the browser was caching a value that was already cached upstream — the same TTL, the same source, just with a `QueryClient`, a provider, and ~12kB of client JS attached. Removing it cut a dependency, deleted a `"use client"` provider from the layout tree, and didn't change observed behavior. If a future requirement introduces genuine client-only state — optimistic mutations, paginated infinite scroll, request deduping across unrelated components — the case for adding it back is real. For a tag list that changes on the same cadence as the page itself, it wasn't carrying weight.
+Server fetches via `lib/api.ts` drive the *initial render* — that's what gets statically generated and ISR-cached. React Query handles one specific client-side concern: the **tag list in `TagFilter`**.
+
+On first render, the server passes the tag list as `initialTags` (fetched via RSC). React Query uses this as `placeholderData` and revalidates in the background after 5 minutes via `getAllTags()` from `lib/api.ts` — keeping the "components never call fetch directly" boundary intact. This means the tag list stays fresh without a server round-trip on every client navigation, while remaining consistent with the server's ISR cache TTL.
+
+The `staleTime: 5 * 60 * 1000` in `TagFilter` intentionally matches the ISR `revalidate: 300` window. If the ISR window changes, both update together.
+
+The provider uses `useState(makeQueryClient)` so the client is created exactly once per browser session, and a fresh instance per server render — preventing cross-request cache bleed.
 
 ---
 
