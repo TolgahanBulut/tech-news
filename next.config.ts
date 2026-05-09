@@ -12,11 +12,6 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  // Limit concurrent page generation to avoid rate-limiting from DummyJSON
-  experimental: {
-    workerThreads: false,
-    cpus: 1,
-  },
 };
 
 export default nextConfig;

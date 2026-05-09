@@ -225,9 +225,10 @@ tech-news/
 │   └── utils.ts                      # buildExcerpt, computeReadingTime, …
 ├── types/
 │   └── index.ts                      # Domain + wire types
-└── tests/
+└── __tests__/
 ├── utils.test.ts
 ├── Pagination.test.ts
+├── TagFilter.test.tsx
 └── ArticleCard.test.tsx
 
 ---

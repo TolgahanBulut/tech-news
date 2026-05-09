@@ -155,6 +155,11 @@ export async function getArticles(
     }),
   );
 
+  // DummyJSON does not currently emit "[Removed]" titles; this filter is
+  // defensive. Note: filtering after pagination means a hypothetical
+  // removed item would shrink the visible page by one without adjusting
+  // totalItems. Acceptable because the upstream behaviour does not occur
+  // in practice; revisit if DummyJSON's contract changes.
   const visible = articles.filter((a) => a.title !== REMOVED_TITLE);
 
   return {
